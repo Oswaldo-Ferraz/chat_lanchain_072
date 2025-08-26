@@ -1,0 +1,128 @@
+name: Deploy to VPS
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: # Permite executar manualmente
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - name: 🚀 Checkout code
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Get current stack info
+        id: stack-info
+        run: |
+          # Buscar stack existente no Portainer
+          STACK_ID=$(curl -s -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
+            "${{ secrets.PORTAINER_URL }}/api/stacks" | \
+            jq -r '.[] | select(.Name=="langchain-api") | .Id // empty')
+          
+          if [ ! -z "$STACK_ID" ]; then
+            echo "stack_exists=true" >> $GITHUB_OUTPUT
+            echo "stack_id=$STACK_ID" >> $GITHUB_OUTPUT
+            echo "✅ Stack existente encontrada: ID $STACK_ID"
+          else
+            echo "stack_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Stack não encontrada - será criada nova"
+          fi
+      
+      - name: 🔄 Update existing stack
+        if: steps.stack-info.outputs.stack_exists == 'true'
+        run: |
+          echo "🔄 Atualizando stack existente..."
+          
+          # Atualizar stack via Git Repository method
+          curl -X PUT \
+            -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.PORTAINER_URL }}/api/stacks/${{ steps.stack-info.outputs.stack_id }}/git/redeploy" \
+            -d '{
+              "env": [
+                {
+                  "name": "OPENAI_API_KEY",
+                  "value": "${{ secrets.OPENAI_API_KEY }}"
+                }
+              ],
+              "prune": true,
+              "pullImage": true
+            }' | jq '.'
+          
+          echo "✅ Stack atualizada com sucesso!"
+      
+      - name: 🆕 Create new stack
+        if: steps.stack-info.outputs.stack_exists == 'false'
+        run: |
+          echo "🆕 Criando nova stack..."
+          
+          # Criar nova stack via Repository method
+          curl -X POST \
+            -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.PORTAINER_URL }}/api/stacks/create/swarm/repository" \
+            -d '{
+              "name": "langchain-api",
+              "swarmID": "1",
+              "repositoryURL": "https://github.com/Oswaldo-Ferraz/chat_lanchain_072",
+              "repositoryReferenceName": "",
+              "composeFile": "langchain_fastapi.yml",
+              "env": [
+                {
+                  "name": "OPENAI_API_KEY",
+                  "value": "${{ secrets.OPENAI_API_KEY }}"
+                }
+              ],
+              "repositoryAuthentication": false,
+              "autoUpdate": {
+                "interval": "5m",
+                "webhook": ""
+              }
+            }' | jq '.'
+          
+          echo "✅ Nova stack criada com sucesso!"
+      
+      - name: ⏳ Wait for deployment
+        run: |
+          echo "⏳ Aguardando deploy completar..."
+          sleep 30
+      
+      - name: 🏥 Health check
+        run: |
+          echo "🏥 Verificando saúde da aplicação..."
+          
+          # Tentar 5 vezes com intervalo de 10s
+          for i in {1..5}; do
+            if curl -f -s "http://147.79.83.6:8000/health" | jq -r '.status' | grep -q "healthy"; then
+              echo "✅ Aplicação está saudável!"
+              echo "🔗 API disponível em: http://147.79.83.6:8000"
+              echo "📚 Documentação em: http://147.79.83.6:8000/docs"
+              exit 0
+            else
+              echo "⏳ Tentativa $i/5 - aplicação ainda não está pronta..."
+              sleep 10
+            fi
+          done
+          
+          echo "❌ Falha no health check após 5 tentativas"
+          echo "📋 Logs do container para debug:"
+          curl -s -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
+            "${{ secrets.PORTAINER_URL }}/api/endpoints/1/docker/containers/json" | \
+            jq -r '.[] | select(.Names[] | contains("langchain")) | .Id' | head -1 | \
+            xargs -I {} curl -s -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
+            "${{ secrets.PORTAINER_URL }}/api/endpoints/1/docker/containers/{}/logs?stdout=1&stderr=1&tail=50"
+          exit 1
+      
+      - name: 📢 Deploy success notification
+        if: success()
+        run: |
+          echo "🎉 Deploy realizado com sucesso!"
+          echo "📊 Resumo do deploy:"
+          echo "  • Repositório: ${{ github.repository }}"
+          echo "  • Branch: ${{ github.ref_name }}"
+          echo "  • Commit: ${{ github.sha }}"
+          echo "  • Autor: ${{ github.actor }}"
+          echo "  • URL: http://147.79.83.6:8000"
+          echo "  • Docs: http://147.79.83.6:8000/docs"
