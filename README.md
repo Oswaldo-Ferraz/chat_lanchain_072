@@ -82,7 +82,7 @@ docker run -d \
 ```
 ├── src/
 │   ├── 001.py              # Script original de teste
-│   └── api_fastapi.py      # API FastAPI principal
+│   └── langchain_fastapi.py      # API FastAPI principal
 ├── config/
 │   └── config.yaml         # Configurações (sem credenciais)
 ├── imgDocker/
@@ -112,7 +112,7 @@ OPENAI_API_KEY=sua_chave_openai
 ### 3. Executar API
 
 ```bash
-uvicorn src.api_fastapi:app --reload --host 127.0.0.1 --port 8000
+uvicorn src.langchain_fastapi:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ### 4. Testar script original

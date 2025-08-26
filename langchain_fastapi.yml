@@ -1,0 +1,59 @@
+# 🚀 LANGCHAIN API - PORTAINER WEB EDITOR (CORRIGIDO)
+# Cole este arquivo no Portainer > Stacks > Add Stack > Web Editor
+
+version: '3.8'
+
+services:
+  langchain-api:
+    image: python:3.11-slim
+    
+    # Instalar e rodar aplicação
+    command: |
+      sh -c "
+        echo '🔧 Instalando dependências do sistema...' &&
+        apt-get update && 
+        apt-get install -y curl git &&
+        echo '📦 Clonando repositório...' &&
+        git clone https://github.com/Oswaldo-Ferraz/chat_lanchain_072.git /app &&
+        cd /app &&
+        echo '📦 Instalando dependências Python...' &&
+        pip install --no-cache-dir -r requirements.txt &&
+        pip install --no-cache-dir uvicorn[standard] &&
+        echo '🚀 Iniciando aplicação...' &&
+        uvicorn src.langchain_fastapi:app --host 0.0.0.0 --port 8000 --reload
+      "
+    
+    # ⚡ Environment Variables - CONFIGURE AQUI!
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PINECONE_API_KEY=sua_chave_pinecone_aqui
+      - ENVIRONMENT=production
+    
+    ports:
+      - "8000:8000"
+    
+    restart: unless-stopped
+    
+    # Health check para monitoramento
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Conectar à rede do Traefik (CORRIGIDO)
+    networks:
+      - fernet
+    
+    # Labels para Traefik (proxy reverso)
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.langchain-api.rule=Host(`langchain.agenciafer.com.br`)"
+      - "traefik.http.routers.langchain-api.entrypoints=websecure"
+      - "traefik.http.routers.langchain-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.langchain-api.loadbalancer.server.port=8000"
+
+networks:
+  fernet:
+    external: true
