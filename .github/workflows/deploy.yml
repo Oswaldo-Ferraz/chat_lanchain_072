@@ -1,25 +1,105 @@
-name: Deploy to VPS
+name: Complete CI/CD Pipeline
 on:
   push:
     branches: [ main ]
   workflow_dispatch: # Permite executar manualmente
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
-    environment: production
     
     steps:
       - name: 🚀 Checkout code
         uses: actions/checkout@v4
       
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+      
+      - name: 🔍 Validate Docker Compose file
+        run: |
+          echo "🔍 Validando arquivo docker-compose..."
+          
+          if [ -f "langchain_fastapi.yml" ]; then
+            echo "✅ Arquivo langchain_fastapi.yml encontrado"
+            
+            # Verificar sintaxe YAML
+            python -c "import yaml; yaml.safe_load(open('langchain_fastapi.yml'))"
+            echo "✅ Sintaxe YAML válida"
+            
+            # Verificar se contém serviços necessários
+            if grep -q "services:" langchain_fastapi.yml; then
+              echo "✅ Seção 'services' encontrada"
+            else
+              echo "❌ Seção 'services' não encontrada"
+              exit 1
+            fi
+            
+          else
+            echo "❌ Arquivo langchain_fastapi.yml não encontrado"
+            exit 1
+          fi
+      
+      - name: 🧪 Test Python syntax
+        run: |
+          echo "🧪 Testando sintaxe Python..."
+          
+          if [ -f "src/langchain_fastapi.py" ]; then
+            echo "✅ Arquivo src/langchain_fastapi.py encontrado"
+            python -m py_compile src/langchain_fastapi.py
+            echo "✅ Sintaxe Python válida"
+          else
+            echo "❌ Arquivo src/langchain_fastapi.py não encontrado"
+            exit 1
+          fi
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: 🚀 Checkout code
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Check Portainer connection
+        run: |
+          echo "🔍 Testando conexão com Portainer..."
+          
+          # Verificar se Portainer está acessível
+          if curl -f -s --max-time 10 "${{ secrets.PORTAINER_URL }}/api/system/version" > /dev/null; then
+            echo "✅ Portainer está acessível"
+          else
+            echo "❌ Falha na conexão com Portainer"
+            echo "Tentando novamente em 30 segundos..."
+            sleep 30
+            
+            if curl -f -s --max-time 10 "${{ secrets.PORTAINER_URL }}/api/system/version" > /dev/null; then
+              echo "✅ Portainer conectado na segunda tentativa"
+            else
+              echo "❌ Portainer inacessível após duas tentativas"
+              exit 1
+            fi
+          fi
+      
       - name: 🔍 Get current stack info
         id: stack-info
         run: |
+          echo "🔍 Verificando stacks existentes..."
+          
           # Buscar stack existente no Portainer
-          STACK_ID=$(curl -s -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
+          STACK_ID=$(curl -s --max-time 30 \
+            -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
             "${{ secrets.PORTAINER_URL }}/api/stacks" | \
-            jq -r '.[] | select(.Name=="langchain-api") | .Id // empty')
+            jq -r '.[] | select(.Name=="langchain-api") | .Id // empty' 2>/dev/null || echo "")
           
           if [ ! -z "$STACK_ID" ]; then
             echo "stack_exists=true" >> $GITHUB_OUTPUT
@@ -27,16 +107,17 @@ jobs:
             echo "✅ Stack existente encontrada: ID $STACK_ID"
           else
             echo "stack_exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Stack não encontrada - será criada nova"
+            echo "🆕 Nenhuma stack encontrada - será criada nova"
           fi
       
       - name: 🔄 Update existing stack
         if: steps.stack-info.outputs.stack_exists == 'true'
         run: |
-          echo "🔄 Atualizando stack existente..."
+          echo "🔄 Atualizando stack existente ID: ${{ steps.stack-info.outputs.stack_id }}"
           
           # Atualizar stack via Git Repository method
-          curl -X PUT \
+          RESPONSE=$(curl -s -w "%{http_code}" --max-time 60 \
+            -X PUT \
             -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
             -H "Content-Type: application/json" \
             "${{ secrets.PORTAINER_URL }}/api/stacks/${{ steps.stack-info.outputs.stack_id }}/git/redeploy" \
@@ -49,9 +130,17 @@ jobs:
               ],
               "prune": true,
               "pullImage": true
-            }' | jq '.'
+            }')
           
-          echo "✅ Stack atualizada com sucesso!"
+          HTTP_CODE=$(echo "$RESPONSE" | tail -c 4)
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Stack atualizada com sucesso!"
+          else
+            echo "❌ Falha na atualização da stack. HTTP Code: $HTTP_CODE"
+            echo "Response: $RESPONSE"
+            exit 1
+          fi
       
       - name: 🆕 Create new stack
         if: steps.stack-info.outputs.stack_exists == 'false'
@@ -59,7 +148,8 @@ jobs:
           echo "🆕 Criando nova stack..."
           
           # Criar nova stack via Repository method
-          curl -X POST \
+          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 120 \
+            -X POST \
             -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
             -H "Content-Type: application/json" \
             "${{ secrets.PORTAINER_URL }}/api/stacks/create/swarm/repository" \
@@ -80,49 +170,70 @@ jobs:
                 "interval": "5m",
                 "webhook": ""
               }
-            }' | jq '.'
+            }')
           
-          echo "✅ Nova stack criada com sucesso!"
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          
+          echo "HTTP Code: $HTTP_CODE"
+          echo "Response: $BODY"
+          
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ Nova stack criada com sucesso!"
+          else
+            echo "❌ Falha na criação da stack. HTTP Code: $HTTP_CODE"
+            exit 1
+          fi
       
       - name: ⏳ Wait for deployment
         run: |
           echo "⏳ Aguardando deploy completar..."
-          sleep 30
+          echo "⏳ Aguardando containers iniciarem..."
+          sleep 45
       
       - name: 🏥 Health check
         run: |
           echo "🏥 Verificando saúde da aplicação..."
           
-          # Tentar 5 vezes com intervalo de 10s
-          for i in {1..5}; do
-            if curl -f -s "http://147.79.83.6:8000/health" | jq -r '.status' | grep -q "healthy"; then
+          # Tentar 8 vezes com intervalo de 15s
+          for i in {1..8}; do
+            echo "🔍 Tentativa $i/8..."
+            
+            if curl -f -s --max-time 10 "http://147.79.83.6:8000/health" | jq -r '.status' 2>/dev/null | grep -q "healthy"; then
               echo "✅ Aplicação está saudável!"
-              echo "🔗 API disponível em: http://147.79.83.6:8000"
-              echo "📚 Documentação em: http://147.79.83.6:8000/docs"
+              echo "🎯 Deploy realizado com sucesso!"
+              echo ""
+              echo "📋 URLs disponíveis:"
+              echo "  🔗 API: http://147.79.83.6:8000"
+              echo "  📚 Docs: http://147.79.83.6:8000/docs"
+              echo "  🏥 Health: http://147.79.83.6:8000/health"
               exit 0
             else
-              echo "⏳ Tentativa $i/5 - aplicação ainda não está pronta..."
-              sleep 10
+              echo "⏳ Aplicação ainda não está pronta... (aguardando 15s)"
+              sleep 15
             fi
           done
           
-          echo "❌ Falha no health check após 5 tentativas"
-          echo "📋 Logs do container para debug:"
-          curl -s -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
-            "${{ secrets.PORTAINER_URL }}/api/endpoints/1/docker/containers/json" | \
-            jq -r '.[] | select(.Names[] | contains("langchain")) | .Id' | head -1 | \
-            xargs -I {} curl -s -H "X-API-Key: ${{ secrets.PORTAINER_TOKEN }}" \
-            "${{ secrets.PORTAINER_URL }}/api/endpoints/1/docker/containers/{}/logs?stdout=1&stderr=1&tail=50"
+          echo "❌ Falha no health check após 8 tentativas (2 minutos)"
+          echo "🔍 Tentando diagnóstico..."
+          
+          # Verificar se o container existe
+          curl -s --max-time 10 "http://147.79.83.6:8000" || echo "Sem resposta HTTP"
+          
           exit 1
       
-      - name: 📢 Deploy success notification
+      - name: 📢 Success notification
         if: success()
         run: |
-          echo "🎉 Deploy realizado com sucesso!"
+          echo "🎉 CI/CD Pipeline executado com sucesso!"
+          echo ""
           echo "📊 Resumo do deploy:"
-          echo "  • Repositório: ${{ github.repository }}"
-          echo "  • Branch: ${{ github.ref_name }}"
-          echo "  • Commit: ${{ github.sha }}"
-          echo "  • Autor: ${{ github.actor }}"
-          echo "  • URL: http://147.79.83.6:8000"
-          echo "  • Docs: http://147.79.83.6:8000/docs"
+          echo "  📦 Repositório: ${{ github.repository }}"
+          echo "  🌿 Branch: ${{ github.ref_name }}"
+          echo "  🔗 Commit: ${{ github.sha }}"
+          echo "  👤 Autor: ${{ github.actor }}"
+          echo "  ⏰ Timestamp: $(date)"
+          echo ""
+          echo "🚀 Aplicação disponível em:"
+          echo "  🌐 http://147.79.83.6:8000"
+          echo "  📚 http://147.79.83.6:8000/docs"
