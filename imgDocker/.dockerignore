@@ -1,0 +1,52 @@
+# Arquivos de ambiente e credenciais
+.env
+.env.*
+*.key
+*.pem
+
+# Cache e temporários
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Git e controle de versão
+.git/
+.gitignore
+.gitattributes
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# IDE e editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Dados locais
+data/
+temp/
+tmp/
+
+# Notebooks
+*.ipynb
+notebooks/
+
+# Arquivos de teste
+test_*
+*_test.py

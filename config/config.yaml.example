@@ -1,0 +1,6 @@
+OPENAI_API_KEY: "cole-sua-api-key-aqui"
+
+# Configurações opcionais para futura expansão:
+# DATABASE_URL: "postgresql://user:password@localhost:5432/chatbot"
+# WEBHOOK_URL: "https://seu-sistema.com/webhook"
+# LOG_LEVEL: "INFO"
