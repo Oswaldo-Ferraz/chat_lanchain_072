@@ -23,7 +23,7 @@ services:
         uvicorn src.langchain_fastapi:app --host 0.0.0.0 --port 8000 --reload
       "
     
-    # ⚡ Environment Variables - CONFIGURE AQUI!
+        # ⚡ Environment Variables - CONFIGURE AQUI!
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - PINECONE_API_KEY=sua_chave_pinecone_aqui
